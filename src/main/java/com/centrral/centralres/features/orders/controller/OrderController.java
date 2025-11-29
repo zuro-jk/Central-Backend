@@ -1,0 +1,187 @@
+package com.centrral.centralres.features.orders.controller;
+
+import java.util.List;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.centrral.centralres.core.security.dto.ApiResponse;
+import com.centrral.centralres.core.security.model.User;
+import com.centrral.centralres.features.orders.dto.order.request.AssignDriverRequest;
+import com.centrral.centralres.features.orders.dto.order.request.OrderRequest;
+import com.centrral.centralres.features.orders.dto.order.request.UpdateLocationRequest;
+import com.centrral.centralres.features.orders.dto.order.request.UpdateStatusRequest;
+import com.centrral.centralres.features.orders.dto.order.response.OrderResponse;
+import com.centrral.centralres.features.orders.dto.payment.request.PaymentInOrderRequest;
+import com.centrral.centralres.features.orders.service.OrderService;
+
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+
+@RestController
+@RequestMapping("/api/v1/orders")
+@RequiredArgsConstructor
+public class OrderController {
+
+    private final OrderService orderService;
+
+    @GetMapping
+    @PreAuthorize("hasAnyRole('ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_WAITER', 'ROLE_CHEF', 'ROLE_CASHIER')")
+    public ResponseEntity<ApiResponse<List<OrderResponse>>> getAll(
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang,
+            @RequestParam(name = "type", required = false) String typeCode) {
+        List<OrderResponse> orders = orderService.getAll(lang, typeCode);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Órdenes obtenidas correctamente", orders));
+    }
+
+    @GetMapping("/{id}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<OrderResponse>> getById(
+            @PathVariable Long id,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang) {
+        OrderResponse order = orderService.getById(id, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Orden obtenida correctamente", order));
+    }
+
+    @GetMapping("/{id}/tracking")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<OrderResponse>> trackOrder(
+            @PathVariable Long id,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang) {
+        OrderResponse trackingInfo = orderService.getTrackingInfo(id, lang);
+        return ResponseEntity
+                .ok(new ApiResponse<>(true, "Seguimiento de la orden obtenido correctamente", trackingInfo));
+    }
+
+    @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()") // <-- CAMBIO: Más explícito
+    public ResponseEntity<ApiResponse<List<OrderResponse>>> getMyOrders(
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang,
+            @AuthenticationPrincipal User user) {
+        List<OrderResponse> orders = orderService.getOrdersForCurrentUser(user, lang);
+        return ResponseEntity
+                .ok(new ApiResponse<>(true, "Órdenes del usuario autenticado obtenidas correctamente", orders));
+    }
+
+    @GetMapping("/{id}/download-invoice")
+    // <-- CAMBIO: El Manager también puede descargar
+    @PreAuthorize("hasAnyRole('ROLE_CASHIER', 'ROLE_ADMIN', 'ROLE_MANAGER')")
+
+    public ResponseEntity<byte[]> downloadInvoice(@PathVariable Long id) {
+
+        byte[] pdfBytes = orderService.generateInvoiceForOrder(id);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        String filename = "Comprobante-Orden-" + id + ".pdf";
+
+        headers.setContentDispositionFormData("inline", filename);
+        headers.setContentLength(pdfBytes.length);
+
+        return new ResponseEntity<>(pdfBytes, headers, HttpStatus.OK);
+    }
+
+    @PostMapping
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<OrderResponse>> create(
+            @Valid @RequestBody OrderRequest request,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang,
+            @AuthenticationPrincipal User user) {
+        OrderResponse order = orderService.create(user, request, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Orden creada correctamente", order));
+    }
+
+    @PostMapping("/pos/sale")
+    @PreAuthorize("hasAnyRole('ROLE_CASHIER', 'ROLE_ADMIN', 'ROLE_WAITER', 'ROLE_MANAGER')")
+    public ResponseEntity<ApiResponse<OrderResponse>> createPosSale(
+            @Valid @RequestBody OrderRequest request,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang,
+            @AuthenticationPrincipal User cashierUser) {
+
+        OrderResponse order = orderService.createPosSale(cashierUser, request, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Venta POS registrada correctamente", order));
+    }
+
+    @PostMapping("/{id}/payments/local")
+    @PreAuthorize("hasAnyRole('ROLE_CASHIER', 'ROLE_ADMIN', 'ROLE_MANAGER')")
+    public ResponseEntity<ApiResponse<Void>> addLocalPayment(
+            @PathVariable Long id,
+            @Valid @RequestBody PaymentInOrderRequest request) {
+        orderService.addLocalPayment(id, request);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Pago local registrado correctamente", null));
+    }
+
+    @PostMapping("/{id}/location")
+    @PreAuthorize("hasAnyRole('ROLE_WAITER', 'ROLE_MANAGER', 'ROLE_ADMIN')")
+    public ResponseEntity<ApiResponse<Void>> updateLocation(
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateLocationRequest request,
+            @AuthenticationPrincipal User authenticatedUser) {
+        orderService.updateDeliveryLocation(id, request, authenticatedUser);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Ubicación actualizada", null));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_WAITER', 'ROLE_CASHIER', 'ROLE_CHEF')")
+    public ResponseEntity<ApiResponse<OrderResponse>> update(
+            @PathVariable Long id,
+            @Valid @RequestBody OrderRequest request,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang) {
+        OrderResponse order = orderService.update(id, request, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Orden actualizada correctamente", order));
+    }
+
+    @PutMapping("/{id}/cancel")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<ApiResponse<OrderResponse>> cancelOrder(
+            @PathVariable Long id,
+            @AuthenticationPrincipal User user,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang) {
+        OrderResponse cancelledOrder = orderService.cancelOrder(id, user, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Orden cancelada correctamente", cancelledOrder));
+    }
+
+    @PutMapping("/{id}/status")
+    @PreAuthorize("hasAnyRole('ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_WAITER', 'ROLE_CHEF', 'ROLE_CASHIER')")
+    public ResponseEntity<ApiResponse<OrderResponse>> updateStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateStatusRequest request,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang) {
+
+        OrderResponse order = orderService.updateStatus(id, request, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Estado de la orden actualizado", order));
+    }
+
+    @PutMapping("/{id}/assign-driver")
+    @PreAuthorize("hasAnyRole('ROLE_ADMIN', 'ROLE_MANAGER')")
+    public ResponseEntity<ApiResponse<OrderResponse>> assignDriver(
+            @PathVariable Long id,
+            @Valid @RequestBody AssignDriverRequest request,
+            @RequestHeader(name = "Accept-Language", defaultValue = "es") String lang) {
+
+        OrderResponse order = orderService.assignDriver(id, request, lang);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Repartidor asignado correctamente", order));
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ROLE_ADMIN', 'ROLE_MANAGER')")
+
+    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
+        orderService.delete(id);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Orden eliminada correctamente", null));
+    }
+}

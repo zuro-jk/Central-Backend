@@ -1,0 +1,48 @@
+package com.centrral.centralres.features.feedbackloyalty.service;
+
+import java.util.List;
+
+import org.springframework.stereotype.Service;
+
+import com.centrral.centralres.features.customers.dto.review.response.ReviewResponse;
+import com.centrral.centralres.features.customers.service.CustomerService;
+import com.centrral.centralres.features.customers.service.ReviewService;
+import com.centrral.centralres.features.feedbackloyalty.dto.response.FeedbackLoyaltySummaryResponse;
+import com.centrral.centralres.features.feedbackloyalty.dto.response.LoyalCustomerResponse;
+import com.centrral.centralres.features.feedbackloyalty.dto.reward.response.RewardResponse;
+
+import lombok.RequiredArgsConstructor;
+
+@Service
+@RequiredArgsConstructor
+public class FeedbackLoyaltyService {
+
+    private final ReviewService reviewService;
+    private final CustomerService customerService;
+    private final LoyaltyService loyaltyService;
+    private final RewardService rewardService;
+
+    public FeedbackLoyaltySummaryResponse getFeedbackLoyaltySummary() {
+        List<ReviewResponse> recentReviews = reviewService.findRecentReviews(5);
+        double averageRating = reviewService.calculateAverageSatisfaction();
+
+        long totalRegisteredCustomers = customerService.countAllCustomers();
+        int totalPointsAccumulated = loyaltyService.getTotalPointsAccumulated();
+        int totalPointsRedeemed = loyaltyService.getTotalPointsRedeemed();
+
+        // Clientes más leales y premios
+        List<LoyalCustomerResponse> topLoyalCustomers = loyaltyService.getTopLoyalCustomers(3);
+        List<RewardResponse> availableRewards = rewardService.getAvailableRewards();
+
+        return FeedbackLoyaltySummaryResponse.builder()
+                .recentReviews(recentReviews)
+                .averageRating(averageRating)
+                .totalRegisteredCustomers(totalRegisteredCustomers)
+                .totalPointsAccumulated(totalPointsAccumulated)
+                .totalPointsRedeemed(totalPointsRedeemed)
+                .topLoyalCustomers(topLoyalCustomers)
+                .availableRewards(availableRewards)
+                .build();
+    }
+
+}

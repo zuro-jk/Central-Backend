@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://aws-1-us-east-2.pooler.supabase.com:6543/postgres?sslmode=require&prepareThreshold=0
+    username: ${SPRING_DATASOURCE_USERNAME_PROD}
+    password: ${SPRING_DATASOURCE_PASSWORD_PROD}
+    driver-class-name: org.postgresql.Driver
+
+app:
+  frontend:
+    url: https://tudominio-produccion.com
+  cors:
+    allowed-origins: https://tudominio-produccion.com

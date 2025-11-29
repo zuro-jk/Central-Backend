@@ -1,0 +1,26 @@
+package com.centrral.centralres.core.config;
+
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.core.userdetails.UserDetails;
+
+import com.centrral.centralres.core.security.model.User;
+
+public class CustomDaoAuthenticationProvider extends DaoAuthenticationProvider {
+
+    @Override
+    protected void additionalAuthenticationChecks(UserDetails userDetails,
+            UsernamePasswordAuthenticationToken authentication)
+            throws BadCredentialsException {
+
+        if (userDetails instanceof User user) {
+            if (user.getPassword() == null || user.getPassword().isEmpty()) {
+                throw new BadCredentialsException(
+                        "Este usuario no tiene contraseña. Usa OAuth o agrega una contraseña.");
+            }
+        }
+
+        super.additionalAuthenticationChecks(userDetails, authentication);
+    }
+}

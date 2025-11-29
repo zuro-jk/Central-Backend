@@ -1,0 +1,93 @@
+package com.centrral.centralres.features.customers.model;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+
+import org.hibernate.annotations.Formula;
+
+import com.centrral.centralres.core.model.Auditable;
+import com.centrral.centralres.features.customers.dto.reservation.request.BaseReservationRequest;
+import com.centrral.centralres.features.customers.dto.reservation.request.ReservationRequest;
+import com.centrral.centralres.features.customers.enums.ReservationStatus;
+import com.centrral.centralres.features.restaurant.model.TableEntity;
+
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Entity
+@Table(name = "reservations")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+@AttributeOverride(name = "id", column = @Column(name = "reservation_id"))
+public class Reservation extends Auditable {
+
+    @ManyToOne
+    @JoinColumn(name = "customer_id", nullable = false)
+    private Customer customer;
+
+    @Column(name = "contact_name", length = 100)
+    private String contactName;
+
+    @Column(name = "contact_phone", length = 15)
+    private String contactPhone;
+
+    @Column(name = "reservation_date", nullable = false)
+    private LocalDate reservationDate;
+
+    @Column(name = "reservation_time", nullable = false)
+    private LocalTime reservationTime;
+
+    @Column(name = "number_of_people", nullable = false)
+    private Integer numberOfPeople;
+
+    @ManyToOne
+    @JoinColumn(name = "table_id", nullable = false)
+    private TableEntity table;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", length = 50)
+    private ReservationStatus status = ReservationStatus.PENDING;
+
+    @Formula("CAST(reservation_date || ' ' || reservation_time AS timestamp)")
+    private LocalDateTime startDateTime;
+
+    @Formula("(CAST(reservation_date || ' ' || reservation_time AS timestamp) + INTERVAL '60 MINUTE')")
+    private LocalDateTime endDateTime;
+
+    public void updateFromDto(BaseReservationRequest dto, Customer customer, TableEntity table) {
+        if (dto.getContactName() != null)
+            this.contactName = dto.getContactName().trim();
+        if (dto.getContactPhone() != null)
+            this.contactPhone = dto.getContactPhone().trim();
+        if (dto.getReservationDate() != null)
+            this.reservationDate = dto.getReservationDate();
+        if (dto.getReservationTime() != null)
+            this.reservationTime = dto.getReservationTime();
+        if (dto.getNumberOfPeople() != null)
+            this.numberOfPeople = dto.getNumberOfPeople();
+        if (customer != null)
+            this.customer = customer;
+        if (table != null)
+            this.table = table;
+
+        if (dto instanceof ReservationRequest req && req.getStatus() != null) {
+            this.status = req.getStatus();
+        }
+    }
+
+}
