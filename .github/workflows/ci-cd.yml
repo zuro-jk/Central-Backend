@@ -19,11 +19,12 @@ jobs:
 
       - name: Construir y Subir Imagen
         run: |
-          # YA NO HACEMOS "cd backend" porque ya estamos ahí
+          # Construimos la imagen desde la raíz
           docker build -t ${{ secrets.DOCKER_USERNAME }}/central-backend:latest .
           docker push ${{ secrets.DOCKER_USERNAME }}/central-backend:latest
 
-`  deploy:
+  # --- FÍJATE AQUÍ: 'deploy' tiene 2 espacios de sangría para alinearse con 'build-push' ---
+  deploy:
     needs: build-push
     runs-on: ubuntu-latest
     steps:
@@ -35,9 +36,12 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd central-app
-            # Bajamos solo los cambios del backend
+            
+            # 1. Bajamos solo la nueva imagen del backend
             docker-compose pull backend
-            # Reiniciamos solo el backend
+            
+            # 2. Reiniciamos solo el contenedor del backend
             docker-compose up -d backend
-            # Limpiamos imágenes viejas
+            
+            # 3. Limpieza
             docker image prune -f
