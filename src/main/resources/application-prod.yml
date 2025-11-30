@@ -1,12 +1,28 @@
 spring:
+  config:
+    activate:
+      on-profile: prod
+
   datasource:
-    url: jdbc:postgresql://aws-1-us-east-2.pooler.supabase.com:6543/postgres?sslmode=require&prepareThreshold=0
-    username: ${SPRING_DATASOURCE_USERNAME_PROD}
-    password: ${SPRING_DATASOURCE_PASSWORD_PROD}
+    url: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
     driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+  data:
+    redis:
+      host: redis
+      port: 6379
+      password: ${REDIS_PASSWORD}
+      timeout: 60000
 
 app:
   frontend:
-    url: https://tudominio-produccion.com
+    url: ${APP_FRONTEND_URL}
   cors:
-    allowed-origins: https://tudominio-produccion.com
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS}
