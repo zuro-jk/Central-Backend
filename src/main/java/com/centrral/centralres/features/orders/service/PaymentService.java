@@ -18,6 +18,7 @@ import com.centrral.centralres.features.orders.dto.payment.request.PaymentUpdate
 import com.centrral.centralres.features.orders.dto.payment.response.PaymentResponse;
 import com.centrral.centralres.features.orders.enums.PaymentStatus;
 import com.centrral.centralres.features.orders.model.Order;
+import com.centrral.centralres.features.orders.model.OrderStatus;
 import com.centrral.centralres.features.orders.model.Payment;
 import com.centrral.centralres.features.orders.model.PaymentMethod;
 import com.centrral.centralres.features.orders.repository.OrderRepository;
@@ -25,7 +26,6 @@ import com.centrral.centralres.features.orders.repository.OrderStatusRepository;
 import com.centrral.centralres.features.orders.repository.PaymentMethodRepository;
 import com.centrral.centralres.features.orders.repository.PaymentRepository;
 import com.centrral.centralres.features.orders.specifications.PaymentSpecification;
-import com.fasterxml.jackson.databind.JsonNode;
 
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -107,17 +107,14 @@ public class PaymentService {
 
                 log.info("Confirmando pago Niubiz");
 
-                // Extraer ID de la orden del purchaseNumber (ej: "105-17482348")
                 Long orderId = Long.parseLong(request.getPurchaseNumber().split("-")[0]);
 
                 Order order = orderRepository.findById(orderId)
                                 .orElseThrow(() -> new EntityNotFoundException("Orden no encontrada ID: " + orderId));
 
-                // --- CORRECCIÓN 2: Lógica de autorización ---
-                // authorizePayment devuelve boolean, y recibe BigDecimal
                 boolean isAuthorized = niubizService.authorizePayment(
                                 request.getTransactionToken(),
-                                request.getAmount(), // Pasar BigDecimal directo
+                                request.getAmount(),
                                 request.getPurchaseNumber());
 
                 if (!isAuthorized) {
@@ -139,9 +136,13 @@ public class PaymentService {
 
                 Payment saved = paymentRepository.save(payment);
 
-                // Opcional: Actualizar estado de la orden a PAGADO aquí si es necesario
-                // order.setStatus(...);
-                // orderRepository.save(order);
+                OrderStatus nextStatus = orderStatusRepository.findByCode("PENDING_CONFIRM")
+                                .orElseGet(() -> orderStatusRepository.findByCode("CONFIRMED")
+                                                .orElseThrow(() -> new EntityNotFoundException(
+                                                                "Estado de confirmación no encontrado")));
+
+                order.setStatus(nextStatus);
+                orderRepository.save(order);
 
                 return mapToResponse(saved);
         }

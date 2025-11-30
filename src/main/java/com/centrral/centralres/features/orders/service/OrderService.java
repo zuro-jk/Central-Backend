@@ -785,6 +785,7 @@ public class OrderService {
                                                                 .id(d.getId())
                                                                 .productId(d.getProduct().getId())
                                                                 .productName(d.getProduct().getName())
+                                                                .productImageUrl(d.getProduct().getImageUrl())
                                                                 .quantity(d.getQuantity())
                                                                 .unitPrice(d.getUnitPrice())
                                                                 .build())
