@@ -61,6 +61,9 @@ public class SecurityConfig {
                         .requestMatchers("/oauth2/**").permitAll()
                         .requestMatchers("/loginSuccess").permitAll()
                         .requestMatchers("/api/v1/notification/**").permitAll()
+
+                        .requestMatchers("/api/v1/payments/niubiz/callback").permitAll()
+
                         .requestMatchers(HttpMethod.GET, "/api/v1/products/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
 

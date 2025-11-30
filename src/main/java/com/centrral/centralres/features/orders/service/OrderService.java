@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,14 +11,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.centrral.centralres.core.config.TaxConfig;
 import com.centrral.centralres.core.security.model.User;
-import com.centrral.centralres.core.security.repository.UserRepository;
 import com.centrral.centralres.features.customers.model.Customer;
 import com.centrral.centralres.features.customers.repository.CustomerRepository;
 import com.centrral.centralres.features.employees.model.Employee;
@@ -30,7 +27,6 @@ import com.centrral.centralres.features.orders.dto.order.request.DeliveryAddress
 import com.centrral.centralres.features.orders.dto.order.request.OrderRequest;
 import com.centrral.centralres.features.orders.dto.order.request.UpdateLocationRequest;
 import com.centrral.centralres.features.orders.dto.order.request.UpdateStatusRequest;
-import com.centrral.centralres.features.orders.dto.order.response.OrderCreatedEvent;
 import com.centrral.centralres.features.orders.dto.order.response.OrderResponse;
 import com.centrral.centralres.features.orders.dto.order.response.OrderStatusStepResponse;
 import com.centrral.centralres.features.orders.dto.orderdetail.request.OrderDetailInOrderRequest;
@@ -45,6 +41,7 @@ import com.centrral.centralres.features.orders.model.OrderTypeTranslation;
 import com.centrral.centralres.features.orders.repository.OrderRepository;
 import com.centrral.centralres.features.orders.repository.OrderStatusRepository;
 import com.centrral.centralres.features.orders.repository.OrderTypeRepository;
+import com.centrral.centralres.features.orders.repository.PaymentMethodRepository;
 import com.centrral.centralres.features.products.enums.MovementSource;
 import com.centrral.centralres.features.products.enums.MovementType;
 import com.centrral.centralres.features.products.exceptions.InventoryNotFoundException;
@@ -83,12 +80,11 @@ public class OrderService {
         private final InventoryMovementRepository inventoryMovementRepository;
         private final DocumentService documentService;
         private final PaymentService paymentService;
-        // private final NotificationProducer notificationProducer;
-        private final UserRepository userRepository;
         private final TableRepository tableRepository;
         private final StoreRepository storeRepository;
         private final DistanceMatrixService distanceMatrixService;
         private final InvoiceGenerator invoiceGenerator;
+        private final PaymentMethodRepository paymentMethodRepository;
 
         public List<OrderResponse> getAll(String lang, String typeCode) {
                 List<Order> orders;
@@ -170,46 +166,39 @@ public class OrderService {
                                 .toList();
         }
 
+        /**
+         * CREAR ORDEN (Cliente Web/Móvil)
+         * Modificado para manejar lógica de pagos online vs offline.
+         */
         @Transactional
         public OrderResponse create(User user, OrderRequest request, String lang) {
                 Customer customer = customerRepository.findByUserId(user.getId())
                                 .orElseThrow(() -> new EntityNotFoundException(
                                                 "Cliente no encontrado para el usuario autenticado"));
 
+                // 1. Construir base de la orden
                 Order order = buildOrderBase(request, customer);
 
+                // 2. Calcular Totales y Detalles
                 BigDecimal total = BigDecimal.ZERO;
                 Set<OrderDetail> details = new LinkedHashSet<>();
 
                 for (OrderDetailInOrderRequest d : request.getDetails()) {
                         Product product = productRepository.findById(d.getProductId())
                                         .orElseThrow(() -> new EntityNotFoundException(
-                                                        "Producto no encontrado con id: " + d.getProductId()));
+                                                        "Producto no encontrado: " + d.getProductId()));
 
                         BigDecimal basePrice = product.getPrice();
-                        if (basePrice == null) {
-                                throw new IllegalStateException(
-                                                "El producto con id " + product.getId() + " no tiene precio asignado.");
-                        }
-
                         BigDecimal taxRate = taxConfig.getRate();
-                        if (taxRate == null) {
-                                throw new IllegalStateException("No está configurada la tasa de impuestos.");
-                        }
-
                         BigDecimal priceWithTax = basePrice.multiply(BigDecimal.ONE.add(taxRate));
-                        BigDecimal safeQuantity = d.getQuantity() != null ? BigDecimal.valueOf(d.getQuantity())
-                                        : BigDecimal.ZERO;
 
-                        if (safeQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+                        // Validar cantidad
+                        if (d.getQuantity() == null || d.getQuantity() <= 0) {
                                 throw new IllegalArgumentException(
-                                                "Cantidad inválida para el producto con id " + d.getProductId());
+                                                "Cantidad inválida para producto: " + product.getName());
                         }
 
-                        BigDecimal lineTotal = priceWithTax.multiply(safeQuantity);
-
-                        log.debug("Calculando línea -> productoId={}, priceWithTax={}, quantity={}, lineTotal={}",
-                                        product.getId(), priceWithTax, safeQuantity, lineTotal);
+                        BigDecimal lineTotal = priceWithTax.multiply(BigDecimal.valueOf(d.getQuantity()));
 
                         OrderDetail detail = OrderDetail.builder()
                                         .order(order)
@@ -218,7 +207,9 @@ public class OrderService {
                                         .unitPrice(priceWithTax)
                                         .build();
 
-                        applyInventoryMovement(product, d.getQuantity(), false, order.getId(), "Creación de orden");
+                        // Descontar inventario (Reserva temporal, si no paga se debería revertir por un
+                        // job o al cancelar)
+                        applyInventoryMovement(product, d.getQuantity(), false, null, "Reserva de orden pendiente");
 
                         details.add(detail);
                         total = total.add(lineTotal);
@@ -227,86 +218,42 @@ public class OrderService {
                 order.setDetails(details);
                 order.setTotal(total);
 
-                if (order.getType() != null &&
-                                "DELIVERY".equalsIgnoreCase(order.getType().getCode()) &&
-                                order.getDeliveryLatitude() != null &&
-                                order.getDeliveryLongitude() != null) {
+                // 3. Calcular Tiempos de Entrega (Lógica Google Maps)
+                calculateDeliveryEstimate(order, request);
 
-                        try {
-                                Store mainStore = storeRepository.findAll().stream()
-                                                .findFirst()
-                                                .orElseThrow(() -> new IllegalStateException(
-                                                                "No hay tiendas configuradas."));
+                // 4. Guardar Orden Inicial
+                Order savedOrder = orderRepository.save(order);
 
-                                double originLat = mainStore.getLatitude();
-                                double originLng = mainStore.getLongitude();
-                                double destLat = order.getDeliveryLatitude();
-                                double destLng = order.getDeliveryLongitude();
+                // Actualizar referencia de inventario con el ID real de la orden
+                savedOrder.getDetails().forEach(d -> applyInventoryMovement(d.getProduct(), 0, false,
+                                savedOrder.getId(), "Asociar inventario a orden " + savedOrder.getId()));
 
-                                Map<String, Object> distanceResponse = distanceMatrixService.getDistanceAndDuration(
-                                                originLat, originLng, destLat, destLng);
-
-                                var rows = (List<?>) distanceResponse.get("rows");
-                                if (rows != null && !rows.isEmpty()) {
-                                        var elements = (List<?>) ((Map<?, ?>) rows.get(0)).get("elements");
-                                        if (elements != null && !elements.isEmpty()) {
-                                                Map<?, ?> element = (Map<?, ?>) elements.get(0);
-                                                Map<?, ?> distance = (Map<?, ?>) element.get("distance");
-                                                Map<?, ?> duration = (Map<?, ?>) element.get("duration");
-
-                                                if (distance != null && duration != null) {
-                                                        String distanceText = distance.get("text").toString();
-                                                        String durationText = duration.get("text").toString();
-
-                                                        log.info("Distancia calculada: {}, Duración estimada: {}",
-                                                                        distanceText, durationText);
-
-                                                        order.setEstimatedDistance(distanceText);
-                                                        order.setEstimatedDuration(durationText);
-
-                                                        int estimatedTimeMinutes = parseDurationToMinutes(durationText);
-
-                                                        int totalPrepTime = request.getDetails().stream()
-                                                                        .mapToInt(d -> {
-                                                                                Product p = productRepository.findById(
-                                                                                                d.getProductId())
-                                                                                                .orElse(null);
-                                                                                return p != null && p
-                                                                                                .getPreparationTimeMinutes() != null
-                                                                                                                ? p.getPreparationTimeMinutes()
-                                                                                                                : 0;
-                                                                        })
-                                                                        .sum();
-
-                                                        int totalItems = request.getDetails().stream()
-                                                                        .mapToInt(d -> d.getQuantity() != null
-                                                                                        ? d.getQuantity()
-                                                                                        : 0)
-                                                                        .sum();
-
-                                                        int baseDelay = 10;
-                                                        int itemDelay = totalItems * 2;
-                                                        int trafficDelay = Math.max(5,
-                                                                        (int) Math.round(estimatedTimeMinutes * 0.3));
-
-                                                        int estimatedTotalTime = totalPrepTime + estimatedTimeMinutes
-                                                                        + baseDelay + itemDelay + trafficDelay;
-
-                                                        order.setEstimatedTime(estimatedTotalTime);
-                                                }
-                                        }
+                // 5. Manejo de Pagos
+                // IMPORTANTE: Solo procesamos pagos aquí si NO SON ONLINE (Efectivo, POS, etc.)
+                // Si es online (Niubiz), el pago se crea después en el
+                // PaymentController/Service
+                if (request.getPayments() != null) {
+                        for (PaymentInOrderRequest p : request.getPayments()) {
+                                // Verificar si es un método que requiere flujo externo
+                                if (isOnlinePaymentMethod(p.getPaymentMethodId())) {
+                                        log.info("Orden {} creada. Esperando pago online (Niubiz/MP).",
+                                                        savedOrder.getId());
+                                        // No creamos el payment entity aquí. El frontend iniciará el flujo con el ID de
+                                        // la orden.
+                                } else {
+                                        paymentService.createInOrder(savedOrder, p);
                                 }
-                        } catch (Exception e) {
-                                log.error("Error al calcular distancia o duración estimada: {}", e.getMessage());
-                                order.setEstimatedTime(30);
                         }
                 }
 
-                savePaymentsAndDocuments(order, request);
-                Order savedOrder = orderRepository.save(order);
-                publishOrderCreatedEvent(savedOrder);
+                // 6. Generar Documentos (Boleta/Factura) si aplica
+                // Generalmente se generan AFTER payment, pero si es contraentrega se puede
+                // pre-generar o esperar.
+                if (request.getDocuments() != null && !isOnlineOrderPendingPayment(savedOrder, request)) {
+                        request.getDocuments().forEach(d -> documentService.createInOrder(savedOrder, d));
+                }
 
-                return mapToResponse(savedOrder, lang);
+                return mapToResponse(orderRepository.save(savedOrder), lang);
         }
 
         @Transactional
@@ -381,7 +328,6 @@ public class OrderService {
 
                 Order finalSavedOrder = orderRepository.save(savedOrder);
 
-                publishOrderCreatedEvent(finalSavedOrder);
                 return mapToResponse(finalSavedOrder, lang);
         }
 
@@ -471,9 +417,6 @@ public class OrderService {
 
                 order.setStatus(newStatus);
                 Order savedOrder = orderRepository.save(order);
-
-                // TODO: Enviar notificación al cliente sobre el cambio de estado
-                // notificationProducer.sendOrderStatusUpdate(savedOrder, newStatus.getCode());
 
                 log.info("Orden {} actualizada al estado: {}", savedOrder.getId(), newStatus.getCode());
                 return mapToResponse(savedOrder, lang);
@@ -772,11 +715,14 @@ public class OrderService {
 
         private void applyInventoryMovement(Product product, Integer quantity, boolean restore, Long referenceId,
                         String reason) {
+                if (quantity == 0)
+                        return;
+
                 product.getIngredients().forEach(pi -> {
                         Inventory inventory = inventoryRepository.findByIngredient(pi.getIngredient())
                                         .orElseThrow(() -> new InventoryNotFoundException(
-                                                        "Inventario no encontrado para ingrediente: "
-                                                                        + pi.getIngredient().getName()));
+                                                        "Inventario no encontrado: " + pi.getIngredient().getName()));
+
                         BigDecimal totalQty = BigDecimal.valueOf(pi.getQuantity())
                                         .multiply(BigDecimal.valueOf(quantity));
 
@@ -793,17 +739,16 @@ public class OrderService {
                                         .type(restore ? MovementType.ENTRY : MovementType.EXIT)
                                         .source(MovementSource.ORDER)
                                         .reason(reason)
-                                        .referenceId(referenceId)
+                                        .referenceId(referenceId) 
                                         .date(LocalDateTime.now())
                                         .build();
                         inventoryMovementRepository.save(movement);
 
-                        if (!restore && inventory.getCurrentStock().compareTo(inventory.getMinimumStock()) < 0) {
-                                if (inventory.shouldNotifyLowStock()) {
-                                        notifyAdminsStockLowAsync(inventory);
-                                        inventory.markAlertSent();
-                                        inventoryRepository.save(inventory);
-                                }
+                        // Alertas de stock bajo
+                        if (!restore && inventory.getCurrentStock().compareTo(inventory.getMinimumStock()) < 0
+                                        && inventory.shouldNotifyLowStock()) {
+                                inventory.markAlertSent();
+                                inventoryRepository.save(inventory);
                         }
                 });
         }
@@ -886,84 +831,6 @@ public class OrderService {
                 return responseBuilder.build();
         }
 
-        private void publishOrderCreatedEvent(Order savedOrder) {
-                try {
-                        byte[] pdfBytes = invoiceGenerator.generateInvoice(savedOrder);
-                        String pdfBase64 = Base64.getEncoder().encodeToString(pdfBytes);
-
-                        OrderCreatedEvent event = OrderCreatedEvent.builder()
-                                        .orderId(savedOrder.getId())
-                                        .customerId(savedOrder.getCustomer().getId())
-                                        .customerName(savedOrder.getCustomer().getUser().getFullName())
-                                        .customerEmail(savedOrder.getCustomer().getUser().getEmail())
-                                        .total(savedOrder.getTotal())
-                                        .createdAt(savedOrder.getDate())
-                                        .products(savedOrder.getDetails().stream()
-                                                        .map(item -> OrderCreatedEvent.ProductInfo.builder()
-                                                                        .name(item.getProduct().getName())
-                                                                        .unitPrice(item.getProduct().getPrice())
-                                                                        .quantity(item.getQuantity())
-                                                                        .build())
-                                                        .toList())
-                                        .build();
-
-                        // OrderNotificationEvent notification = OrderNotificationEvent.builder()
-                        //                 .userId(event.getCustomerId())
-                        //                 .recipient(event.getCustomerEmail())
-                        //                 .subject("¡Tu orden #" + event.getOrderId() + " ha sido confirmada!")
-                        //                 .message("¡Wow! Gracias por tu compra, " + event.getCustomerName()
-                        //                                 + ". Tu orden está en proceso.")
-                        //                 .actionUrl("https://miapp.com/orders/" + event.getOrderId())
-                        //                 .orderId(event.getOrderId())
-                        //                 .products(event.getProducts().stream()
-                        //                                 .map(p -> new EmailTemplateBuilder.OrderProduct(
-                        //                                                 p.getName(),
-                        //                                                 p.getUnitPrice(),
-                        //                                                 p.getQuantity()))
-                        //                                 .toList())
-                        //                 .total(event.getTotal())
-                        //                 .orderDate(event.getCreatedAt())
-                        //                 .pdfAttachmentBase64(pdfBase64)
-                        //                 .attachmentName("Comprobante_Orden_" + event.getOrderId() + ".pdf")
-                        //                 .build();
-
-                        // notificationProducer.send("notifications", notification);
-
-                } catch (Exception e) {
-                        throw new RuntimeException("Error creando evento de notificación de orden", e);
-                }
-        }
-
-        @Async
-        public void notifyAdminsStockLowAsync(Inventory inventory) {
-                List<User> admins = userRepository.findByRoleName("ROLE_ADMIN");
-
-                for (User admin : admins) {
-                        try {
-                                // StockLowNotificationEvent event = StockLowNotificationEvent.builder()
-                                //                 .userId(admin.getId())
-                                //                 .recipient(admin.getEmail())
-                                //                 .subject("⚠️ Stock bajo: " + inventory.getIngredient().getName())
-                                //                 .message("El stock del ingrediente '"
-                                //                                 + inventory.getIngredient().getName() +
-                                //                                 "' ha bajado a " + inventory.getCurrentStock() +
-                                //                                 " unidades. Stock mínimo: "
-                                //                                 + inventory.getMinimumStock())
-                                //                 .actionUrl("https://tuapp.com/inventory")
-                                //                 .ingredientId(inventory.getIngredient().getId())
-                                //                 .ingredientName(inventory.getIngredient().getName())
-                                //                 .currentStock(inventory.getCurrentStock())
-                                //                 .minimumStock(inventory.getMinimumStock())
-                                //                 .build();
-
-                                // notificationProducer.send("notifications", event);
-                        } catch (Exception e) {
-                                log.error("❌ Error enviando notificación de stock bajo para admin {}", admin.getEmail(),
-                                                e);
-                        }
-                }
-        }
-
         private String normalizeLang(String lang) {
                 if (lang == null || lang.isEmpty())
                         return "es";
@@ -992,34 +859,39 @@ public class OrderService {
                                 .orElse("Sin nombre");
         }
 
-        private int parseDurationToMinutes(String durationText) {
-                if (durationText == null || durationText.isBlank())
-                        return 0;
+        private boolean isOnlinePaymentMethod(Long paymentMethodId) {
+                return paymentMethodRepository.findById(paymentMethodId)
+                                .map(pm -> "NIUBIZ".equalsIgnoreCase(pm.getProvider())
+                                                || "MERCADOPAGO".equalsIgnoreCase(pm.getProvider()))
+                                .orElse(false);
+        }
 
-                durationText = durationText.toLowerCase();
-                int minutes = 0;
+        private boolean isOnlineOrderPendingPayment(Order order, OrderRequest request) {
+                if (request.getPayments() == null || request.getPayments().isEmpty())
+                        return false;
+                return request.getPayments().stream().anyMatch(p -> isOnlinePaymentMethod(p.getPaymentMethodId()));
+        }
 
-                try {
-                        if (durationText.contains("hour")) {
-                                String[] parts = durationText.split("hour");
-                                int hours = Integer.parseInt(parts[0].trim());
-                                minutes += hours * 60;
+        private void calculateDeliveryEstimate(Order order, OrderRequest request) {
+                if (order.getType() != null &&
+                                "DELIVERY".equalsIgnoreCase(order.getType().getCode()) &&
+                                order.getDeliveryLatitude() != null &&
+                                order.getDeliveryLongitude() != null) {
 
-                                if (parts.length > 1 && parts[1].contains("min")) {
-                                        String mins = parts[1].replaceAll("[^0-9]", "");
-                                        if (!mins.isEmpty())
-                                                minutes += Integer.parseInt(mins);
-                                }
-                        } else if (durationText.contains("min")) {
-                                String mins = durationText.replaceAll("[^0-9]", "");
-                                if (!mins.isEmpty())
-                                        minutes = Integer.parseInt(mins);
+                        try {
+                                Store mainStore = storeRepository.findAll().stream().findFirst()
+                                                .orElseThrow(() -> new IllegalStateException(
+                                                                "No hay tiendas configuradas."));
+
+                                Map<String, Object> distanceResponse = distanceMatrixService.getDistanceAndDuration(
+                                                mainStore.getLatitude(), mainStore.getLongitude(),
+                                                order.getDeliveryLatitude(), order.getDeliveryLongitude());
+
+                        } catch (Exception e) {
+                                log.error("Error calculando delivery estimate: {}", e.getMessage());
+                                order.setEstimatedTime(45);
                         }
-                } catch (Exception e) {
-                        log.warn("No se pudo parsear duración estimada: {}", durationText);
                 }
-
-                return minutes;
         }
 
         public int countOrdersByDate(LocalDate date) {

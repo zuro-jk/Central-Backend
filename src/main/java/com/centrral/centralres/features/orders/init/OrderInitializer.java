@@ -184,7 +184,7 @@ public class OrderInitializer implements CommandLineRunner {
 
                 List<PaymentMethod> methods = List.of(
                                 PaymentMethod.builder().code("CASH").provider("INTERNAL").build(),
-                                PaymentMethod.builder().code("CARD").provider("MERCADOPAGO").build(),
+                                PaymentMethod.builder().code("CARD").provider("NIUBIZ").build(),
                                 PaymentMethod.builder().code("YAPE").provider("INTERNAL").build(),
                                 PaymentMethod.builder().code("PLIN").provider("INTERNAL").build(),
                                 PaymentMethod.builder().code("TRANSFER").provider("INTERNAL").build());
@@ -198,65 +198,55 @@ public class OrderInitializer implements CommandLineRunner {
                                 case "CASH" -> {
                                         translations.addAll(List.of(
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("es").name("Efectivo")
+                                                                        .paymentMethod(method).lang("es")
+                                                                        .name("Efectivo")
                                                                         .description("Pago en efectivo en el restaurante")
                                                                         .build(),
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("en").name("Cash")
+                                                                        .paymentMethod(method).lang("en").name("Cash")
                                                                         .description("Cash payment at the restaurant")
                                                                         .build()));
                                 }
                                 case "CARD" -> {
                                         translations.addAll(List.of(
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("es").name("Tarjeta")
-                                                                        .description("Pago con tarjeta de crédito o débito vía MercadoPago")
+                                                                        .paymentMethod(method).lang("es")
+                                                                        .name("Tarjeta")
+                                                                        .description("Pago con tarjeta de crédito o débito vía Niubiz")
                                                                         .build(),
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("en").name("Card")
-                                                                        .description("Credit or debit card payment via MercadoPago")
+                                                                        .paymentMethod(method).lang("en").name("Card")
+                                                                        .description("Credit or debit card payment via Niubiz")
                                                                         .build()));
                                 }
                                 case "YAPE" -> {
                                         translations.addAll(List.of(
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("es").name("Yape")
-                                                                        .description("Pago mediante Yape")
-                                                                        .build(),
+                                                                        .paymentMethod(method).lang("es").name("Yape")
+                                                                        .description("Pago mediante Yape").build(),
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("en").name("Yape")
-                                                                        .description("Payment via Yape")
-                                                                        .build()));
+                                                                        .paymentMethod(method).lang("en").name("Yape")
+                                                                        .description("Payment via Yape").build()));
                                 }
                                 case "PLIN" -> {
                                         translations.addAll(List.of(
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("es").name("Plin")
-                                                                        .description("Pago mediante Plin")
-                                                                        .build(),
+                                                                        .paymentMethod(method).lang("es").name("Plin")
+                                                                        .description("Pago mediante Plin").build(),
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("en").name("Plin")
-                                                                        .description("Payment via Plin")
-                                                                        .build()));
+                                                                        .paymentMethod(method).lang("en").name("Plin")
+                                                                        .description("Payment via Plin").build()));
                                 }
                                 case "TRANSFER" -> {
                                         translations.addAll(List.of(
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("es").name("Transferencia Bancaria")
+                                                                        .paymentMethod(method).lang("es")
+                                                                        .name("Transferencia Bancaria")
                                                                         .description("Pago mediante transferencia bancaria")
                                                                         .build(),
                                                         PaymentMethodTranslation.builder()
-                                                                        .paymentMethod(method)
-                                                                        .lang("en").name("Bank Transfer")
+                                                                        .paymentMethod(method).lang("en")
+                                                                        .name("Bank Transfer")
                                                                         .description("Payment via bank transfer")
                                                                         .build()));
                                 }
@@ -264,8 +254,7 @@ public class OrderInitializer implements CommandLineRunner {
                 }
 
                 paymentMethodTranslationRepository.saveAll(translations);
-
-                log.info(">>> Métodos de pago inicializados correctamente");
+                log.info(">>> Métodos de pago inicializados correctamente (Incluyendo Niubiz)");
         }
 
         private void initOrderFlows() {

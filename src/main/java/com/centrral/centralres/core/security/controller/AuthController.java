@@ -48,7 +48,7 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<ApiResponse<Object>> register(@Valid @RequestBody RegisterRequest request) {
+    public ResponseEntity<ApiResponse<Long>> register(@Valid @RequestBody RegisterRequest request) {
         Long userId = authService.register(request);
         return ResponseEntity.ok(new ApiResponse<>(true,
                 "Se ha registrado correctamente. Revisa tu correo para activar la cuenta.",

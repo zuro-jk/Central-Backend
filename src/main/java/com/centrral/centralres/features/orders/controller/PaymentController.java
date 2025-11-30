@@ -1,10 +1,12 @@
 package com.centrral.centralres.features.orders.controller;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,11 +19,13 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.centrral.centralres.core.security.dto.ApiResponse;
-import com.centrral.centralres.features.orders.dto.payment.request.OnlineCheckoutRequest;
+import com.centrral.centralres.features.orders.dto.niubiz.NiubizDTO;
+import com.centrral.centralres.features.orders.dto.payment.request.PaymentStartRequest;
 import com.centrral.centralres.features.orders.dto.payment.request.PaymentUpdateRequest;
 import com.centrral.centralres.features.orders.dto.payment.response.PaymentResponse;
 import com.centrral.centralres.features.orders.service.PaymentService;
 
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
@@ -50,13 +54,31 @@ public class PaymentController {
                                 new ApiResponse<>(true, "Pago encontrado", paymentService.getById(id)));
         }
 
-        @PostMapping("/online")
-        public ResponseEntity<ApiResponse<PaymentResponse>> createOnlinePayment(
-                        @RequestBody @Valid OnlineCheckoutRequest request) throws Exception {
+        @PostMapping("/niubiz/start")
+        public ResponseEntity<ApiResponse<NiubizDTO.PaymentStartResponse>> startNiubizPayment(
+                        @RequestBody @Valid PaymentStartRequest request) {
 
-                PaymentResponse response = paymentService.createOnlinePayment(request);
-                return ResponseEntity.status(HttpStatus.CREATED).body(
-                                new ApiResponse<>(true, "Pago creado con MercadoPago", response));
+                NiubizDTO.PaymentStartResponse response = paymentService.startOnlinePayment(request);
+                return ResponseEntity.ok(new ApiResponse<>(true, "Sesión de Niubiz iniciada", response));
+        }
+
+        @PostMapping("/niubiz/confirm")
+        public ResponseEntity<ApiResponse<PaymentResponse>> confirmNiubizPayment(
+                        @RequestBody @Valid NiubizDTO.PaymentConfirmRequest request) {
+
+                PaymentResponse response = paymentService.confirmOnlinePayment(request);
+                return ResponseEntity.ok(new ApiResponse<>(true, "Pago con Niubiz confirmado", response));
+        }
+
+        @PostMapping(value = "/niubiz/callback", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+        public void niubizCallback(@RequestParam Map<String, String> body, HttpServletResponse response)
+                        throws IOException {
+
+                String transactionToken = body.get("transactionToken");
+
+                String frontendUrl = "http://localhost:4200/payment/validate?token=" + transactionToken;
+
+                response.sendRedirect(frontendUrl);
         }
 
         @PutMapping("/{id}")

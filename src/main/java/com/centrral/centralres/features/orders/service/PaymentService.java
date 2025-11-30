@@ -9,17 +9,15 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.centrral.centralres.core.security.model.PaymentProfile;
-import com.centrral.centralres.core.security.model.User;
+import com.centrral.centralres.core.config.NiubizConfig;
 import com.centrral.centralres.core.security.repository.PaymentProfileRepository;
-import com.centrral.centralres.features.orders.dto.payment.request.MercadoPagoCheckoutRequest;
-import com.centrral.centralres.features.orders.dto.payment.request.OnlineCheckoutRequest;
+import com.centrral.centralres.features.orders.dto.niubiz.NiubizDTO;
 import com.centrral.centralres.features.orders.dto.payment.request.PaymentInOrderRequest;
+import com.centrral.centralres.features.orders.dto.payment.request.PaymentStartRequest;
 import com.centrral.centralres.features.orders.dto.payment.request.PaymentUpdateRequest;
 import com.centrral.centralres.features.orders.dto.payment.response.PaymentResponse;
 import com.centrral.centralres.features.orders.enums.PaymentStatus;
 import com.centrral.centralres.features.orders.model.Order;
-import com.centrral.centralres.features.orders.model.OrderStatus;
 import com.centrral.centralres.features.orders.model.Payment;
 import com.centrral.centralres.features.orders.model.PaymentMethod;
 import com.centrral.centralres.features.orders.repository.OrderRepository;
@@ -27,6 +25,7 @@ import com.centrral.centralres.features.orders.repository.OrderStatusRepository;
 import com.centrral.centralres.features.orders.repository.PaymentMethodRepository;
 import com.centrral.centralres.features.orders.repository.PaymentRepository;
 import com.centrral.centralres.features.orders.specifications.PaymentSpecification;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -40,9 +39,10 @@ public class PaymentService {
         private final PaymentRepository paymentRepository;
         private final OrderRepository orderRepository;
         private final PaymentMethodRepository paymentMethodRepository;
-        private final MercadoPagoService mercadoPagoService;
         private final PaymentProfileRepository paymentProfileRepository;
         private final OrderStatusRepository orderStatusRepository;
+        private final NiubizService niubizService;
+        private final NiubizConfig niubizConfig;
 
         public List<PaymentResponse> getAll(
                         Long customerId, Long paymentMethodId, LocalDateTime dateFrom, LocalDateTime dateTo) {
@@ -61,108 +61,89 @@ public class PaymentService {
                 return mapToResponse(payment);
         }
 
-        @Transactional
-        public PaymentResponse createOnlinePayment(OnlineCheckoutRequest request) throws Exception {
+        @Transactional(readOnly = true)
+        public NiubizDTO.PaymentStartResponse startOnlinePayment(PaymentStartRequest request) {
 
-                log.info("Iniciando createOnlinePayment para orderId: {}", request.getOrderId());
+                log.info("Iniciando sesión de pago Niubiz para orderId: {}", request.getOrderId());
 
                 Order order = orderRepository.findById(request.getOrderId())
-                                .orElseThrow(() -> {
-                                        log.warn("Orden no encontrada con id: {}", request.getOrderId());
-                                        return new EntityNotFoundException(
-                                                        "Orden no encontrada con id: " + request.getOrderId());
-                                });
+                                .orElseThrow(() -> new EntityNotFoundException(
+                                                "Orden no encontrada: " + request.getOrderId()));
 
-                if (order.getType() == null) {
-                        throw new IllegalArgumentException("El tipo de orden es nulo.");
+                validateOrderForPayment(order);
+
+                // --- CORRECCIÓN CRÍTICA: FORMATO PURCHASE NUMBER ---
+                // Niubiz exige: Numérico y Max 12 dígitos.
+                // Si tu ID de orden es 150, esto enviará "150".
+                // Si necesitas unicidad por intentos fallidos, puedes usar una lógica más
+                // compleja
+                // pero para empezar, usa el ID directo.
+                String purchaseNumber = String.valueOf(order.getId());
+
+                // OPCIONAL: Si necesitas reintentos, podrías usar:
+                // (orderId % 100000) + "" + (System.currentTimeMillis() % 1000000);
+                // pero intenta primero con el ID limpio.
+
+                if (purchaseNumber.length() > 12) {
+                        throw new RuntimeException("El ID de la orden excede los 12 dígitos permitidos por Niubiz");
+                }
+                // ----------------------------------------------------
+
+                NiubizDTO.PaymentStartResponse niubizResponse = niubizService.createPaymentSession(
+                                request.getAmount(),
+                                purchaseNumber);
+
+                return NiubizDTO.PaymentStartResponse.builder()
+                                .sessionKey(niubizResponse.getSessionKey())
+                                .expirationTime(niubizResponse.getExpirationTime())
+                                .merchantId(niubizConfig.getMerchant().getId())
+                                .purchaseNumber(purchaseNumber)
+                                .amount(request.getAmount())
+                                .build();
+        }
+
+        @Transactional
+        public PaymentResponse confirmOnlinePayment(NiubizDTO.PaymentConfirmRequest request) {
+
+                log.info("Confirmando pago Niubiz");
+
+                // Extraer ID de la orden del purchaseNumber (ej: "105-17482348")
+                Long orderId = Long.parseLong(request.getPurchaseNumber().split("-")[0]);
+
+                Order order = orderRepository.findById(orderId)
+                                .orElseThrow(() -> new EntityNotFoundException("Orden no encontrada ID: " + orderId));
+
+                // --- CORRECCIÓN 2: Lógica de autorización ---
+                // authorizePayment devuelve boolean, y recibe BigDecimal
+                boolean isAuthorized = niubizService.authorizePayment(
+                                request.getTransactionToken(),
+                                request.getAmount(), // Pasar BigDecimal directo
+                                request.getPurchaseNumber());
+
+                if (!isAuthorized) {
+                        throw new RuntimeException("El pago fue rechazado o no autorizado por Niubiz");
                 }
 
-                String orderTypeCode = order.getType().getCode().toUpperCase();
-
-                if (!"DELIVERY".equals(orderTypeCode) && !"TAKE_AWAY".equals(orderTypeCode)) {
-                        log.warn(
-                                        "Intento de pago online RECHAZADO para una orden que no es 'DELIVERY' o 'TAKE_AWAY'. Order ID: {}, Type: {}",
-                                        order.getId(), orderTypeCode);
-
-                        throw new IllegalArgumentException(
-                                        "Los pagos online no están permitidos para este tipo de orden (" + orderTypeCode
-                                                        + ").");
-                }
-
-                if (order.getTotal() == null || order.getTotal().compareTo(BigDecimal.ZERO) <= 0) {
-                        log.warn("Intento de pago para orden {} con monto inválido (nulo o <= 0): {}",
-                                        order.getId(), order.getTotal());
-                        throw new IllegalArgumentException(
-                                        "El monto a pagar (calculado en la orden) debe ser mayor que cero.");
-                }
-
-                log.info("Monto recibido (request): {}. Monto a procesar (order.getTotal): {}",
-                                request.getTransactionAmount(), order.getTotal());
-
-                PaymentMethod method = paymentMethodRepository.findByCodeAndProvider("CARD", "MERCADOPAGO")
-                                .orElseThrow(() -> {
-                                        log.error("Método de pago no configurado para provider: MERCADOPAGO, code: CARD");
-                                        return new EntityNotFoundException(
-                                                        "Método de pago no configurado para provider: MERCADOPAGO");
-                                });
-
-                User user = order.getCustomer().getUser();
-                PaymentProfile paymentProfile = user.getPaymentProfile();
-                if (paymentProfile == null) {
-                        log.info("Creando nuevo PaymentProfile para usuario: {}", user.getId());
-                        paymentProfile = PaymentProfile.builder()
-                                        .user(user)
-                                        .docType(request.getDocType())
-                                        .docNumber(request.getDocNumber())
-                                        .build();
-                        user.setPaymentProfile(paymentProfile);
-                        paymentProfileRepository.save(paymentProfile);
-                }
-
-                MercadoPagoCheckoutRequest mpRequest = mapToMercadoPagoRequest(order, request, paymentProfile);
-
-                log.info("Enviando solicitud de pago a MercadoPago por monto: {}", mpRequest.getTransactionAmount());
-                var mpPayment = mercadoPagoService.createPayment(mpRequest);
-                log.info("Respuesta de MercadoPago recibida. Status: {}", mpPayment.getStatus());
-
-                PaymentStatus status = switch (mpPayment.getStatus()) {
-                        case "approved" -> PaymentStatus.CONFIRMED;
-                        case "in_process", "pending" -> PaymentStatus.PENDING;
-                        case "rejected" -> PaymentStatus.FAILED;
-                        default -> PaymentStatus.PENDING;
-                };
+                PaymentMethod method = paymentMethodRepository.findByCodeAndProvider("CARD", "NIUBIZ")
+                                .orElseThrow(() -> new EntityNotFoundException("Método de pago NIUBIZ no configurado"));
 
                 Payment payment = Payment.builder()
                                 .order(order)
                                 .paymentMethod(method)
-                                .amount(order.getTotal())
+                                .amount(request.getAmount())
                                 .isOnline(true)
-                                .transactionCode(String.valueOf(mpPayment.getId()))
-                                .status(status)
+                                .transactionCode(request.getTransactionToken())
+                                .status(PaymentStatus.CONFIRMED)
                                 .date(LocalDateTime.now())
                                 .build();
 
-                Payment savedPayment = paymentRepository.save(payment);
-                log.info("Pago guardado en DB con ID: {}", savedPayment.getId());
+                Payment saved = paymentRepository.save(payment);
 
-                if (status == PaymentStatus.CONFIRMED) {
-                        log.info("Pago confirmado. Actualizando estado de la orden {} a CONFIRMED", order.getId());
-                        OrderStatus confirmedStatus = orderStatusRepository.findByCode("CONFIRMED")
-                                        .orElseThrow(() -> new EntityNotFoundException(
-                                                        "Estado CONFIRMED no encontrado"));
-                        order.setStatus(confirmedStatus);
-                        orderRepository.save(order);
-                } else {
-                        log.warn("Pago online no aprobado (estado: {}). Moviendo orden {} a PENDING_CONFIRMATION para revisión.",
-                                        mpPayment.getStatus(), order.getId());
-                        OrderStatus pendingConfirmStatus = orderStatusRepository.findByCode("PENDING_CONFIRMATION")
-                                        .orElseThrow(() -> new EntityNotFoundException(
-                                                        "Estado PENDING_CONFIRMATION no encontrado"));
-                        order.setStatus(pendingConfirmStatus);
-                        orderRepository.save(order);
-                }
+                // Opcional: Actualizar estado de la orden a PAGADO aquí si es necesario
+                // order.setStatus(...);
+                // orderRepository.save(order);
 
-                return mapToResponse(savedPayment);
+                return mapToResponse(saved);
         }
 
         @Transactional
@@ -216,22 +197,17 @@ public class PaymentService {
                 paymentRepository.save(payment);
         }
 
-        private MercadoPagoCheckoutRequest mapToMercadoPagoRequest(Order order, OnlineCheckoutRequest request,
-                        PaymentProfile paymentProfile) {
-
-                MercadoPagoCheckoutRequest mpRequest = new MercadoPagoCheckoutRequest();
-                mpRequest.setOrderId(order.getId());
-
-                mpRequest.setTransactionAmount(order.getTotal());
-
-                mpRequest.setInstallments(request.getInstallments());
-                mpRequest.setToken(request.getToken());
-                mpRequest.setEmail(request.getEmail());
-                mpRequest.setDocType(paymentProfile.getDocType());
-                mpRequest.setDocNumber(paymentProfile.getDocNumber());
-                mpRequest.setPaymentMethodId(request.getPaymentMethodId());
-
-                return mpRequest;
+        private void validateOrderForPayment(Order order) {
+                if (order.getType() == null) {
+                        throw new IllegalArgumentException("El tipo de orden es nulo.");
+                }
+                String orderTypeCode = order.getType().getCode().toUpperCase();
+                if (!"DELIVERY".equals(orderTypeCode) && !"TAKE_AWAY".equals(orderTypeCode)) {
+                        throw new IllegalArgumentException("Pagos online no permitidos para: " + orderTypeCode);
+                }
+                if (order.getTotal() == null || order.getTotal().compareTo(BigDecimal.ZERO) <= 0) {
+                        throw new IllegalArgumentException("El monto a pagar debe ser mayor a cero.");
+                }
         }
 
         private PaymentResponse mapToResponse(Payment payment) {

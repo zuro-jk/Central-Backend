@@ -97,9 +97,16 @@ aws:
     access-key: ${AWS_ACCESS_KEY_ID}
     secret-key: ${AWS_SECRET_ACCESS_KEY}
 
-mercadopago:
-  access-token: ${MERCADO_PAGO_ACCESS_TOKEN}
-
 google:
   maps:
     api-key: ${GOOGLE_MAPS_API_KEY}
+
+niubiz:
+  api:
+    security: https://apisandbox.vnforappstest.com/api.security/v1/security
+    session: https://apisandbox.vnforappstest.com/api.ecommerce/v2/ecommerce/token/session
+    authorization: https://apisandbox.vnforappstest.com/api.authorization/v3/authorization/ecommerce
+  merchant:
+    id: ${NIUBIZ_MERCHANT_ID}
+    user: ${NIUBIZ_USER}
+    password: ${NIUBIZ_PASSWORD}

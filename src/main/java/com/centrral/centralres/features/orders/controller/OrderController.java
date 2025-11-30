@@ -78,7 +78,6 @@ public class OrderController {
     }
 
     @GetMapping("/{id}/download-invoice")
-    // <-- CAMBIO: El Manager también puede descargar
     @PreAuthorize("hasAnyRole('ROLE_CASHIER', 'ROLE_ADMIN', 'ROLE_MANAGER')")
 
     public ResponseEntity<byte[]> downloadInvoice(@PathVariable Long id) {
