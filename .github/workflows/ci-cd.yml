@@ -2,7 +2,7 @@ name: Backend CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build-push:
@@ -22,3 +22,22 @@ jobs:
           # YA NO HACEMOS "cd backend" porque ya estamos ahí
           docker build -t ${{ secrets.DOCKER_USERNAME }}/central-backend:latest .
           docker push ${{ secrets.DOCKER_USERNAME }}/central-backend:latest
+
+deploy:
+  needs: build-push
+  runs-on: ubuntu-latest
+  steps:
+    - name: Desplegar en Google Cloud
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          cd central-app
+          # Bajamos solo los cambios del backend
+          docker-compose pull backend
+          # Reiniciamos solo el backend
+          docker-compose up -d backend
+          # Limpiamos imágenes viejas
+          docker image prune -f
