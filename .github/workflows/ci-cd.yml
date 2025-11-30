@@ -1,14 +1,11 @@
-name: CI/CD Pipeline
+name: Backend CI/CD
 
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
 
 jobs:
-  # --- TRABAJO 1: BACKEND ---
-  build-push-backend:
+  build-push:
     runs-on: ubuntu-latest
     steps:
       - name: Descargar código
@@ -20,8 +17,8 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Construir y Subir Backend
+      - name: Construir y Subir Imagen
         run: |
-          cd backend
+          # YA NO HACEMOS "cd backend" porque ya estamos ahí
           docker build -t ${{ secrets.DOCKER_USERNAME }}/central-backend:latest .
           docker push ${{ secrets.DOCKER_USERNAME }}/central-backend:latest
