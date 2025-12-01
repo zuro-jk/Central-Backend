@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,9 @@ import lombok.RequiredArgsConstructor;
 public class PaymentController {
 
         private final PaymentService paymentService;
+
+        @Value("${app.frontend.url}")
+        private String frontendUrl;
 
         @GetMapping
         public ResponseEntity<ApiResponse<List<PaymentResponse>>> getAll(
@@ -76,9 +80,9 @@ public class PaymentController {
 
                 String transactionToken = body.get("transactionToken");
 
-                String frontendUrl = "http://localhost:4200/payment/validate?token=" + transactionToken;
+                String redirectUrl = frontendUrl + "/payment/validate?token=" + transactionToken;
 
-                response.sendRedirect(frontendUrl);
+                response.sendRedirect(redirectUrl);
         }
 
         @PutMapping("/{id}")
