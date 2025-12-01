@@ -95,7 +95,8 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
         String clientIp = httpRequest.getRemoteAddr();
         String userAgent = httpRequest.getHeader("User-Agent");
-        String key = request.getUsernameOrEmail();
+
+        String key = request.getUsernameOrEmail().toLowerCase().trim();
 
         if (blockedUntil.containsKey(key) && blockedUntil.get(key) > System.currentTimeMillis()) {
             throw new TooManyAttemptsException("Demasiados intentos fallidos. Intenta más tarde.");
@@ -181,10 +182,15 @@ public class AuthService {
 
     @Transactional
     public Long register(RegisterRequest request) {
-        if (userRepository.existsByUsername(request.getUsername())) {
+
+        String normalizedEmail = request.getEmail().trim().toLowerCase();
+        String normalizedUsername = request.getUsername().trim().toLowerCase();
+
+        if (userRepository.existsByUsername(normalizedUsername)) {
             throw new UsernameAlreadyExistsException("Username ya existe");
         }
-        if (userRepository.existsByEmailIgnoreCase(request.getEmail())) {
+
+        if (userRepository.existsByEmailIgnoreCase(normalizedEmail)) {
             throw new EmailAlreadyExistsException("Email ya existe");
         }
 
@@ -192,8 +198,8 @@ public class AuthService {
                 .orElseThrow(() -> new RuntimeException("Rol cliente no encontrado"));
 
         User user = User.builder()
-                .username(request.getUsername())
-                .email(request.getEmail())
+                .username(normalizedUsername)
+                .email(normalizedEmail)
                 .password(passwordEncoder.encode(request.getPassword()))
                 .roles(Collections.singleton(defaultRole))
                 .enabled(true)
